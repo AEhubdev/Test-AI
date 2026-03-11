@@ -10,7 +10,7 @@ from PyPDF2 import PdfReader
 from pptx import Presentation
 
 # --- 1. Page Config ---
-st.set_page_config(page_title="Advanced AI Data Scientist", layout="wide")
+st.set_page_config(page_title="Ultimate AI Data Scientist", layout="wide", page_icon="📊")
 
 # --- 2. API Key Gatekeeper ---
 if "openai_key" not in st.session_state:
@@ -28,13 +28,14 @@ if st.session_state.openai_key is None:
 client = openai.OpenAI(api_key=st.session_state.openai_key)
 MODEL = "gpt-4o"
 
+# --- 3. Session State Initialization ---
 if "files" not in st.session_state:
     st.session_state.files = {}
 if "history" not in st.session_state:
     st.session_state.history = []
 
 
-# --- 3. Parsers ---
+# --- 4. File Parsers ---
 def load_file(uploaded_file):
     name = uploaded_file.name
     try:
@@ -52,10 +53,10 @@ def load_file(uploaded_file):
     return None
 
 
-# --- 4. Sidebar ---
+# --- 5. Sidebar: File Uploads & Management ---
 with st.sidebar:
-    st.header("📂 Data Center")
-    uploads = st.file_uploader("Upload Files", type=["csv", "xlsx", "pdf", "pptx"], accept_multiple_files=True)
+    st.header("📂 File Center")
+    uploads = st.file_uploader("Upload Data/Docs", type=["csv", "xlsx", "pdf", "pptx"], accept_multiple_files=True)
     if uploads:
         for f in uploads:
             if f.name not in st.session_state.files:
@@ -66,64 +67,91 @@ with st.sidebar:
         st.session_state.history = []
         st.rerun()
 
-# --- 5. Main Workspace ---
-st.title("🤖 Multi-Modal Data Scientist")
+    st.divider()
+    if st.session_state.files:
+        st.subheader("📥 Export Changes")
+        for fn, content in st.session_state.files.items():
+            if isinstance(content, pd.DataFrame):
+                buf = io.BytesIO()
+                content.to_excel(buf, index=False)
+                st.sidebar.download_button(f"Download {fn}", buf.getvalue(), f"edited_{fn}.xlsx",
+                                           use_container_width=True)
 
-# Chat History Display
-for msg in st.session_state.history:
-    with st.chat_message(msg["role"]):
-        st.markdown(msg["content"])
-        if "fig" in msg: st.pyplot(msg["fig"])
+# --- 6. Main Workspace: Real-time Previews ---
+st.title("🤖 AI Multi-Modal Data Scientist")
 
-# --- 6. The Execution & Reflection Engine ---
-if prompt := st.chat_input("Ask a question (e.g., 'What is the sum of Gold_Monthly_change?')"):
+if st.session_state.files:
+    st.subheader("📋 Live Data Preview")
+    # This creates a tab for every file so you can see exactly what is happening
+    tabs = st.tabs([f"📄 {fn}" for fn in st.session_state.files.keys()])
+    for i, (fn, content) in enumerate(st.session_state.files.items()):
+        with tabs[i]:
+            if isinstance(content, pd.DataFrame):
+                st.dataframe(content, height=300, use_container_width=True)
+                st.caption(f"Rows: {content.shape[0]} | Columns: {content.shape[1]}")
+            else:
+                st.text_area(f"Text Content: {fn}", content[:2000], height=200)
+else:
+    st.info("Please upload a file in the sidebar to begin.")
+
+# --- 7. Chat Interface ---
+st.divider()
+chat_container = st.container()
+
+with chat_container:
+    for msg in st.session_state.history:
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
+            if "fig" in msg: st.pyplot(msg["fig"])
+
+if prompt := st.chat_input("Ask a question or give a command (e.g., 'What's the sum of Gold?' or 'Plot sales')"):
     st.session_state.history.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
 
-    # Prepare Context & Variables
+    # Context & Variables setup
     exec_locals = {"pd": pd, "plt": plt, "sns": sns}
-    context_str = "Variables in memory:\n"
+    context_str = "You have access to these variables in memory:\n"
     for fn, content in st.session_state.files.items():
         var_name = re.sub(r'[^a-zA-Z0-9]', '_', fn)
         exec_locals[var_name] = content
         if isinstance(content, pd.DataFrame):
-            context_str += f"- `{var_name}`: DataFrame ({fn}). Columns: {list(content.columns)}\n"
+            context_str += f"- Variable `{var_name}`: DataFrame from {fn}. Columns: {list(content.columns)}\n"
         else:
-            context_str += f"- `{var_name}`: Text document ({fn})\n"
+            context_str += f"- Variable `{var_name}`: Text from {fn}.\n"
 
-    # STEP 1: AI generates code to find the answer
+    # Plan -> Execute -> Synthesize Loop
     system_msg = f"""
     {context_str}
-    You are a Data Scientist. To answer the user, write Python code that calculates the result.
-    IMPORTANT: Print the final answer using `print()`.
-    Wrap code in ```python blocks.
+    You are a Data Scientist. 
+    1. If asked to calculate something, use `print()` for the result. 
+    2. If asked to change data, update the specific variable directly.
+    3. Always wrap Python code in ```python blocks.
     """
 
     try:
+        # Step 1: AI generates and executes code
         response = client.chat.completions.create(
             model=MODEL,
             messages=[{"role": "system", "content": system_msg}] + st.session_state.history[-5:]
         )
-        ai_code_resp = response.choices[0].message.content
+        ai_raw = response.choices[0].message.content
 
-        # STEP 2: Execute code and capture the PRINTED output
         captured_output = ""
         fig = None
-        if "```python" in ai_code_resp:
-            code = ai_code_resp.split("```python")[1].split("```")[0].strip()
+        if "```python" in ai_raw:
+            code = ai_raw.split("```python")[1].split("```")[0].strip()
 
-            # Redirect stdout to capture print() statements
+            # Setup output capture
             old_stdout = sys.stdout
-            redirected_output = sys.stdout = io.StringIO()
+            sys.stdout = io.StringIO()
 
             try:
                 plt.close('all')
                 exec(code, {}, exec_locals)
-                sys.stdout = old_stdout
-                captured_output = redirected_output.getvalue()
+                captured_output = sys.stdout.getvalue()
 
-                # Update DataFrames in state if modified
+                # Update the actual files in session state
                 for var_name, obj in exec_locals.items():
                     for fn in st.session_state.files.keys():
                         if re.sub(r'[^a-zA-Z0-9]', '_', fn) == var_name:
@@ -131,42 +159,36 @@ if prompt := st.chat_input("Ask a question (e.g., 'What is the sum of Gold_Month
 
                 if plt.get_fignums(): fig = plt.gcf()
             except Exception as e:
+                captured_output = f"Error during execution: {e}"
+            finally:
                 sys.stdout = old_stdout
-                captured_output = f"Execution Error: {e}"
 
-        # STEP 3: Final "ChatGPT Style" Synthesis
-        # We send the raw numbers back to the AI so it can talk to the user
-        synthesis_prompt = f"""
-        The user asked: "{prompt}"
-        The code generated was: {ai_code_resp}
-        The execution output was: "{captured_output}"
+        # Step 2: Final Synthesis (Conversational Response)
+        synthesis_msg = f"""
+        User asked: {prompt}
+        AI Code was: {ai_raw}
+        Code Output was: {captured_output}
 
-        Provide the final answer to the user in a friendly, conversational way. 
-        If a calculation was made, state the result clearly.
+        Explain the result to the user clearly. Mention any data changes made.
         """
 
         final_response = client.chat.completions.create(
             model=MODEL,
-            messages=[{"role": "system", "content": synthesis_prompt}]
+            messages=[{"role": "system", "content": synthesis_msg}]
         )
-        ai_final_text = final_response.choices[0].message.content
+        final_text = final_response.choices[0].message.content
 
         with st.chat_message("assistant"):
-            st.markdown(ai_final_text)
+            st.markdown(final_text)
             if fig: st.pyplot(fig)
 
-        entry = {"role": "assistant", "content": ai_final_text}
+        # Save to history
+        entry = {"role": "assistant", "content": final_text}
         if fig: entry["fig"] = fig
         st.session_state.history.append(entry)
 
+        # Force a rerun to update the Previews at the top!
+        st.rerun()
+
     except Exception as e:
         st.error(f"System Error: {e}")
-
-# --- 7. Export Manager ---
-if st.session_state.files:
-    st.sidebar.divider()
-    for fn, content in st.session_state.files.items():
-        if isinstance(content, pd.DataFrame):
-            buf = io.BytesIO()
-            content.to_excel(buf, index=False)
-            st.sidebar.download_button(f"📥 {fn}", buf.getvalue(), f"updated_{fn}.xlsx", use_container_width=True)
