@@ -7,7 +7,6 @@ import io
 st.set_page_config(page_title="AI Spreadsheet Engineer", layout="wide")
 
 # --- 2. API Key Gatekeeper ---
-# We use session_state so the app remembers the key until the tab is closed
 if "openai_key" not in st.session_state:
     st.session_state.openai_key = None
 
@@ -15,7 +14,6 @@ if st.session_state.openai_key is None:
     st.title("🔑 AI Spreadsheet Engineer")
     st.markdown("### Please enter your OpenAI API Key to begin.")
 
-    # Password type masks the input
     user_key = st.text_input("OpenAI API Key", type="password", placeholder="sk-...")
 
     if st.button("Unlock App"):
@@ -25,7 +23,7 @@ if st.session_state.openai_key is None:
             st.rerun()
         else:
             st.error("Invalid key format. Please enter a valid OpenAI API key.")
-    st.stop()  # Script stops here if no key is in session_state
+    st.stop()
 
 # --- 3. Initialize OpenAI Client & State ---
 client = openai.OpenAI(api_key=st.session_state.openai_key)
@@ -39,7 +37,6 @@ if "chat_history" not in st.session_state:
 # --- 4. Main UI ---
 st.title("📊 Data Analysis & Editing Workspace")
 
-# Sidebar for logout and persistence
 with st.sidebar:
     st.header("Session Control")
     if st.button("Change API Key / Logout"):
@@ -49,11 +46,16 @@ with st.sidebar:
         st.rerun()
     st.divider()
 
-uploaded_file = st.file_uploader("Upload Excel File", type=["xlsx", "xls"])
+# UPDATED: Accept both Excel and CSV
+uploaded_file = st.file_uploader("Upload Data File", type=["xlsx", "xls", "csv"])
 
 if uploaded_file:
     if st.session_state.df is None:
-        st.session_state.df = pd.read_excel(uploaded_file)
+        # LOGIC: Check file extension to use correct pandas reader
+        if uploaded_file.name.endswith('.csv'):
+            st.session_state.df = pd.read_csv(uploaded_file)
+        else:
+            st.session_state.df = pd.read_excel(uploaded_file)
 
 if st.session_state.df is not None:
     # Preview Table
@@ -62,7 +64,7 @@ if st.session_state.df is not None:
 
     # Chat Interface
     st.divider()
-    st.subheader("Chat with your Spreadsheet")
+    st.subheader("Chat with your Data")
 
     for message in st.session_state.chat_history:
         with st.chat_message(message["role"]):
@@ -87,7 +89,7 @@ if st.session_state.df is not None:
         {data_summary}
 
         GOALS:
-        1. For questions (calculations/stats): Answer directly in plain text.
+        1. For questions: Answer directly in plain text.
         2. For data changes: Provide ONLY the Python code in ```python blocks.
         3. Use 'df' as the variable and 'pd' for pandas.
         """
@@ -109,7 +111,7 @@ if st.session_state.df is not None:
                 local_scope = {"df": st.session_state.df, "pd": pd}
                 exec(code_segment, {}, local_scope)
                 st.session_state.df = local_scope["df"]
-                st.success("Changes applied to spreadsheet!")
+                st.success("Changes applied!")
 
             with st.chat_message("assistant"):
                 st.markdown(ai_content)
@@ -120,11 +122,12 @@ if st.session_state.df is not None:
                 st.rerun()
 
         except Exception as e:
-            st.error(f"Error communicating with AI: {str(e)}")
+            st.error(f"Error: {str(e)}")
 
     # --- Export & Reset ---
     st.sidebar.header("Export Data")
     buffer = io.BytesIO()
+    # We export to Excel by default for better formatting
     with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
         st.session_state.df.to_excel(writer, index=False)
 
